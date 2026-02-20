@@ -2,8 +2,10 @@
 #define NV_DIALECT_HOPPER_TRANSFORMS_UTILITY_H_
 
 #include "mlir/IR/Builders.h"
+#include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Dialect.h"
+#include "mlir/IR/Location.h"
 #include "mlir/IR/Operation.h"
 #include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
 #include "llvm/ADT/SetVector.h"
@@ -131,6 +133,12 @@ private:
 // the oldOp to the newOp. This is needed for any operation
 // where the dependency exists without a direct "user".
 void copyLoopScheduleInfo(Operation *newOp, Operation *oldOp);
+
+// Append a partition index suffix to a NameLoc within a Location.
+// For example, loc("p"(inner)) with suffix "0" becomes loc("p0"(inner)).
+// Handles CallSiteLoc nesting (recurses into the callee).
+// Returns the original location unchanged if no NameLoc is found.
+Location appendNameLocSuffix(Location loc, StringRef suffix);
 
 } // namespace mlir
 #endif // NV_DIALECT_HOPPER_TRANSFORMS_UTILITY_H_

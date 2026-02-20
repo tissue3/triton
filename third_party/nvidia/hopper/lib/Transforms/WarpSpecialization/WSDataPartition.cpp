@@ -842,9 +842,12 @@ static Operation *sliceOp(Operation *op, int offset, IRMapping &mappings,
 
   OpBuilderWithAsyncTaskIds builder(op->getContext());
   builder.setAsynTaskIdsFromArray(sliceTaskIds);
+  std::string partitionSuffix = std::to_string(offset);
+  Location partLoc = appendNameLocSuffix(op->getLoc(), partitionSuffix);
   auto cloneAndSetResultType = [&](Operation *op) {
     builder.setInsertionPoint(op);
     auto newOp = builder.clone(*op, mappings);
+    newOp->setLoc(appendNameLocSuffix(op->getLoc(), partitionSuffix));
     setAsyncTaskIds(newOp, sliceTaskIds);
     mappings.map(op, newOp);
     reverseMappings.map(newOp, op);
@@ -955,12 +958,12 @@ static Operation *sliceOp(Operation *op, int offset, IRMapping &mappings,
     // Create token
     if (auto token = tmemLdOp.getDep()) {
       ld = builder.createWithAsyncTaskIds<triton::nvidia_gpu::TMEMLoadOp>(
-          op->getLoc(), newAccType, token.getType(),
+          partLoc, newAccType, token.getType(),
           mappings.lookupOrNull(tmemLdOp.getSrc()),
           mappings.lookupOrNull(token));
     } else {
       ld = builder.createWithAsyncTaskIds<triton::nvidia_gpu::TMEMLoadOp>(
-          op->getLoc(), newAccType, mappings.lookupOrNull(tmemLdOp.getSrc()));
+          partLoc, newAccType, mappings.lookupOrNull(tmemLdOp.getSrc()));
     }
 
     for (auto [v, newV] : llvm::zip(op->getResults(), ld.getResults())) {
@@ -1041,7 +1044,7 @@ static Operation *sliceOp(Operation *op, int offset, IRMapping &mappings,
       auto newAccType = RankedTensorType::get(
           srcTy.getShape(), srcTy.getElementType(), newDistributedEncoding);
       auto cvtOp = builder.createWithAsyncTaskIds<ConvertLayoutOp>(
-          op->getLoc(), newAccType,
+          partLoc, newAccType,
           mappings.lookupOrNull(tmemAllocOp.getSrc()));
 
       Operation *alloc;
@@ -1050,14 +1053,14 @@ static Operation *sliceOp(Operation *op, int offset, IRMapping &mappings,
       if (auto token = tmemAllocOp.getToken()) {
         auto newAllocOp =
             builder.createWithAsyncTaskIds<triton::nvidia_gpu::TMEMAllocOp>(
-                op->getLoc(), newType, token.getType(), cvtOp);
+                partLoc, newType, token.getType(), cvtOp);
         auto newToken = newAllocOp.getToken();
         mappings.map(token, newToken);
         reverseMappings.map(newToken, token);
         alloc = newAllocOp;
       } else {
         alloc = builder.createWithAsyncTaskIds<triton::nvidia_gpu::TMEMAllocOp>(
-            op->getLoc(), newType, cvtOp);
+            partLoc, newType, cvtOp);
       }
       auto v = tmemAllocOp->getResult(0);
       auto newV = alloc->getResult(0);
@@ -1076,8 +1079,8 @@ static Operation *sliceOp(Operation *op, int offset, IRMapping &mappings,
     shape[dim] = sliceSize;
     auto newValType = valType.clone(shape);
     auto newValAttr = valAttr.resizeSplat(newValType);
-    newOp = builder.createWithAsyncTaskIds<arith::ConstantOp>(op->getLoc(),
-                                                              newValAttr);
+    newOp = builder.createWithAsyncTaskIds<arith::ConstantOp>(partLoc,
+                                                                newValAttr);
     // Do not drop original task id as constant folding may lose one constant.
     setAsyncTaskIds(newOp, getAsyncTaskIds(op));
     auto v = op->getResult(0);
@@ -1096,7 +1099,7 @@ static Operation *sliceOp(Operation *op, int offset, IRMapping &mappings,
     auto newType = RankedTensorType::get({sliceSize}, builder.getI32Type(),
                                          type.getEncoding());
     newOp = builder.createWithAsyncTaskIds<MakeRangeOp>(
-        op->getLoc(), newType, newRangeStart, newRangeEnd);
+        partLoc, newType, newRangeStart, newRangeEnd);
     auto newV = newOp->getResult(0);
     mappings.map(v, newV);
     reverseMappings.map(newV, v);
@@ -1123,9 +1126,9 @@ static Operation *sliceOp(Operation *op, int offset, IRMapping &mappings,
     if (offset) {
       builder.setInsertionPointAfter(coordVal.getDefiningOp());
       Value offsetVal = builder.createWithAsyncTaskIds<arith::ConstantIntOp>(
-          op->getLoc(), offset * shape[dim] / numOfPartitions, 32);
-      newCoordVal = builder.createWithAsyncTaskIds<arith::AddIOp>(
-          op->getLoc(), coordVal, offsetVal);
+            partLoc, offset * shape[dim] / numOfPartitions, 32);
+        newCoordVal = builder.createWithAsyncTaskIds<arith::AddIOp>(
+            partLoc, coordVal, offsetVal);
       mappings.map(coordVal, newCoordVal);
       reverseMappings.map(newCoordVal, coordVal);
     }
@@ -1163,6 +1166,7 @@ static Operation *sliceOp(Operation *op, int offset, IRMapping &mappings,
     }
     builder.setInsertionPoint(op);
     newOp = builder.clone(*op, mappings);
+    newOp->setLoc(partLoc);
     setAsyncTaskIds(newOp, sliceTaskIds);
     auto newV = newOp->getResult(0);
     newV.setType(newType);

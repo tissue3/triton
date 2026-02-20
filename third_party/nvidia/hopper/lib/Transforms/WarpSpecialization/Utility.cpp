@@ -1,4 +1,6 @@
 #include "Utility.h"
+#include "mlir/IR/BuiltinAttributes.h"
+#include "mlir/IR/Location.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Partition.h"
 #include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
@@ -101,4 +103,20 @@ void copyLoopScheduleInfo(Operation *newOp, Operation *oldOp) {
     newOp->setAttr(tt::kLoopClusterAttrName,
                    oldOp->getAttr(tt::kLoopClusterAttrName));
 }
+
+Location appendNameLocSuffix(Location loc, StringRef suffix) {
+  if (auto nameLoc = dyn_cast<NameLoc>(loc)) {
+    auto newName =
+        StringAttr::get(loc.getContext(),
+                        (nameLoc.getName().strref() + suffix).str());
+    return NameLoc::get(newName, nameLoc.getChildLoc());
+  }
+  if (auto callSiteLoc = dyn_cast<CallSiteLoc>(loc)) {
+    auto newCallee = appendNameLocSuffix(callSiteLoc.getCallee(), suffix);
+    if (newCallee != callSiteLoc.getCallee())
+      return CallSiteLoc::get(newCallee, callSiteLoc.getCaller());
+  }
+  return loc;
+}
+
 } // namespace mlir

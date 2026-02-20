@@ -1394,6 +1394,20 @@ static Value hoistLocalAlloc(OpBuilderWithAsyncTaskIds &builder,
     return oldAlloc->getResult(0);
   }
 
+  // Derive a partition-specific NameLoc suffix from the consumer async task ID.
+  // After data partition with N partitions, consumer tasks are 1..N (task 0 is
+  // the producer). We suffix the NameLoc with the partition index (task_id -
+  // 1).
+  Location allocLoc = oldAlloc->getLoc();
+  auto taskIds = getAsyncTaskIds(oldAlloc);
+  if (!taskIds.empty()) {
+    int consumerTaskId = taskIds.back();
+    if (consumerTaskId > 0) {
+      std::string suffix = std::to_string(consumerTaskId - 1);
+      allocLoc = appendNameLocSuffix(allocLoc, suffix);
+    }
+  }
+
   auto allocDescType = cast<triton::gpu::MemDescType>(oldAllocType);
   SmallVector<int64_t> shape(allocDescType.getShape());
   Type memdescType = ttg::MemDescType::get(
@@ -1401,16 +1415,14 @@ static Value hoistLocalAlloc(OpBuilderWithAsyncTaskIds &builder,
       allocDescType.getMemorySpace(), /*mutableMemory*/ true);
   Operation *newAlloc;
   if (auto localAlloc = dyn_cast<ttg::LocalAllocOp>(oldAlloc)) {
-    newAlloc =
-        builder.create<ttg::LocalAllocOp>(oldAlloc->getLoc(), memdescType);
+    newAlloc = builder.create<ttg::LocalAllocOp>(allocLoc, memdescType);
   } else if (auto tmemAlloc = dyn_cast<ttng::TMEMAllocOp>(oldAlloc)) {
     if (tmemAlloc.getToken()) {
       newAlloc = builder.create<ttng::TMEMAllocOp>(
-          oldAlloc->getLoc(), memdescType, tmemAlloc.getToken().getType(),
-          Value());
+          allocLoc, memdescType, tmemAlloc.getToken().getType(), Value());
     } else {
-      newAlloc = builder.create<ttng::TMEMAllocOp>(
-          oldAlloc->getLoc(), memdescType, mlir::Type(), Value());
+      newAlloc = builder.create<ttng::TMEMAllocOp>(allocLoc, memdescType,
+                                                   mlir::Type(), Value());
     }
   } else {
     llvm_unreachable("Unexpected alloc type");
@@ -1471,6 +1483,18 @@ createLocalAlloc(OpBuilderWithAsyncTaskIds &builder, Channel *channel,
     }
   });
 
+  // Derive a partition-specific NameLoc suffix from the channel's consumer task
+  // IDs. After data partition with N partitions, consumer tasks are 1..N.
+  Location channelLoc = srcOp->getLoc();
+  auto &consumers = channel->relation.second;
+  if (!consumers.empty()) {
+    int consumerTaskId = consumers.front();
+    if (consumerTaskId > 0) {
+      std::string suffix = std::to_string(consumerTaskId - 1);
+      channelLoc = appendNameLocSuffix(channelLoc, suffix);
+    }
+  }
+
   Value buffer;
   Value newProducer;
 
@@ -1491,7 +1515,7 @@ createLocalAlloc(OpBuilderWithAsyncTaskIds &builder, Channel *channel,
         ttg::MemDescType::get(bufferShape, elemType, encoding,
                               tensorMemorySpace, /*mutableMemory*/ true);
     auto allocOp = builder.create<ttng::TMEMAllocOp>(
-        srcOp->getLoc(), memdescType, builder.getType<ttg::AsyncTokenType>(),
+        channelLoc, memdescType, builder.getType<ttg::AsyncTokenType>(),
         /*src=*/Value());
     newProducer = TMEM1DAllocator(builder).replaceWith1DTMEM(
         dyn_cast<mlir::OpResult>(srcResult), channel->relation.first, dstOp,
@@ -1555,8 +1579,7 @@ createLocalAlloc(OpBuilderWithAsyncTaskIds &builder, Channel *channel,
     Type memdescType = ttg::MemDescType::get(
         isPost ? sliceShape : bufferShape, elemType, sharedLayout,
         sharedMemorySpace, /*mutableMemory*/ true);
-    auto allocOp =
-        builder.create<ttg::LocalAllocOp>(srcOp->getLoc(), memdescType);
+    auto allocOp = builder.create<ttg::LocalAllocOp>(channelLoc, memdescType);
     buffer = allocOp->getResult(0);
 
     if (isPost) {

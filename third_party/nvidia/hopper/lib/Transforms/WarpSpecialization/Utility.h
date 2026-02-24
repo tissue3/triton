@@ -149,5 +149,24 @@ static Location appendToNameLoc(Location loc, StringRef suffix,
   return NameLoc::get(StringAttr::get(ctx, suffix), loc);
 }
 
+// Strip the outermost NameLoc when its child is also a NameLoc, exposing the
+// producer's name.  For example, NameLoc("offsetkv_y", NameLoc("m_i0", ...))
+// becomes NameLoc("m_i0", ...).  Handles CallSiteLoc wrapping.
+// Leaves locs whose child is NOT a NameLoc unchanged (e.g. NameLoc("dk",
+// file)).
+static Location stripOuterNameLoc(Location loc) {
+  if (auto callSiteLoc = dyn_cast<CallSiteLoc>(loc)) {
+    auto newCallee = stripOuterNameLoc(callSiteLoc.getCallee());
+    if (newCallee != callSiteLoc.getCallee())
+      return CallSiteLoc::get(newCallee, callSiteLoc.getCaller());
+    return loc;
+  }
+  if (auto nameLoc = dyn_cast<NameLoc>(loc)) {
+    if (isa<NameLoc>(nameLoc.getChildLoc()))
+      return nameLoc.getChildLoc();
+  }
+  return loc;
+}
+
 } // namespace mlir
 #endif // NV_DIALECT_HOPPER_TRANSFORMS_UTILITY_H_

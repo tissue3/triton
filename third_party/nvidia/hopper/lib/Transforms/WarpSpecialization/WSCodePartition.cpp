@@ -1815,12 +1815,15 @@ DenseMap<Channel *, Value> createBuffer(const SmallVector<Channel *> &channels,
     }
   }
   // Deduplicate namelocs for allocs created from the same source expression.
+  // First strip outer variable aliases to expose the producer name (e.g.
+  // NameLoc("offsetkv_y", NameLoc("m_i0",...)) → NameLoc("m_i0",...)).
   SmallPtrSet<Operation *, 16> seenAllocs;
   DenseMap<Location, SmallVector<Operation *>> locToAllocs;
   for (auto &[channel, buffer] : bufferMap) {
     if (auto *defOp = buffer.getDefiningOp()) {
       if (isa<ttg::LocalAllocOp, ttng::TMEMAllocOp>(defOp) &&
           seenAllocs.insert(defOp).second) {
+        defOp->setLoc(stripOuterNameLoc(defOp->getLoc()));
         locToAllocs[defOp->getLoc()].push_back(defOp);
       }
     }

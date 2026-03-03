@@ -266,7 +266,8 @@ def TTNG_ArriveBarrierOp : TTNG_Op<"arrive_barrier"> {
   let arguments = (ins
     Arg<TTG_MemDescType, "", [MemRead<SharedMemory>, MemWrite<SharedMemory>]>:$alloc,
     I32Attr:$count,
-    Optional<I1>:$pred
+    Optional<I1>:$pred,
+    UnitAttr:$perThread
   );
 
   let assemblyFormat = [{
@@ -275,7 +276,10 @@ def TTNG_ArriveBarrierOp : TTNG_Op<"arrive_barrier"> {
 
   let builders = [
     OpBuilder<(ins "Value":$alloc, "uint32_t":$count), [{
-      return build($_builder, $_state, alloc, count, /*pred=*/Value());
+      return build($_builder, $_state, alloc, count, /*pred=*/Value(), /*perThread=*/false);
+    }]>,
+    OpBuilder<(ins "Value":$alloc, "uint32_t":$count, "bool":$perThread), [{
+      return build($_builder, $_state, alloc, count, /*pred=*/Value(), perThread);
     }]>
   ];
 

@@ -2703,6 +2703,76 @@ def test_wait_arrive_ws(BLOCK_SIZE, device):
             and (ttgir.count("default {") == 1) and (ttgir.count("partition0") == 1)), f"TTGIR {ttgir}"
 
 
+@triton.jit
+def tlx_square_warp_barrier(
+    x_ptr,
+    z_ptr,
+    n_elements,
+    BLOCK_SIZE: tl.constexpr,
+    NUM_WARPS: tl.constexpr,
+):
+    """
+    Test warp barrier: all threads arrive independently (no leader pattern).
+    Uses alloc_warp_barrier instead of alloc_barriers.
+    """
+    pid = tl.program_id(axis=0)
+    block_start = pid * BLOCK_SIZE
+    offsets = block_start + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < n_elements
+
+    bars = tlx.alloc_warp_barrier(num_barriers=1, num_warps=NUM_WARPS)
+    bar = tlx.local_view(bars, 0)
+
+    x = tl.load(x_ptr + offsets, mask=mask)
+
+    p = 0
+    tlx.barrier_arrive(bar=bar)
+    tlx.barrier_wait(bar=bar, phase=p)
+
+    z = x * x
+
+    p = p ^ 1
+    tlx.barrier_arrive(bar=bar)
+    tlx.barrier_wait(bar=bar, phase=p)
+
+    tl.store(z_ptr + offsets, z, mask=mask)
+
+    p = p ^ 1
+    tlx.barrier_arrive(bar=bar)
+    tlx.barrier_wait(bar=bar, phase=0)
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Need Hopper or newer")
+@pytest.mark.parametrize("BLOCK_SIZE", [(1024)])
+@pytest.mark.parametrize("num_warps", [4])
+def test_alloc_warp_barrier(BLOCK_SIZE, num_warps, device):
+    torch.manual_seed(0)
+    size = 98432
+    x = torch.rand(size, device=device)
+    z = torch.empty_like(x)
+    n_elements = x.numel()
+
+    grid = lambda meta: (triton.cdiv(n_elements, meta["BLOCK_SIZE"]), )
+    kernel = tlx_square_warp_barrier[grid](
+        x,
+        z,
+        n_elements,
+        BLOCK_SIZE,
+        num_warps,
+        num_warps=num_warps,
+    )
+
+    z_ref = x * x
+    torch.testing.assert_close(z, z_ref, check_dtype=False)
+
+    # Verify IR uses arrive_barrier with perThread attribute
+    ttgir = kernel.asm["ttgir"]
+    assert ttgir.count("ttng.init_barrier") == 1, f"Expected 1 init_barrier in TTGIR:\n{ttgir}"
+    assert ttgir.count("ttng.arrive_barrier") == 3, f"Expected 3 arrive_barrier in TTGIR:\n{ttgir}"
+    assert ttgir.count("perThread") == 3, f"Expected 3 perThread attrs in TTGIR:\n{ttgir}"
+    assert ttgir.count("ttng.wait_barrier") == 3, f"Expected 3 wait_barrier in TTGIR:\n{ttgir}"
+
+
 @pytest.mark.skipif(not is_hopper_or_newer(), reason="Need Hopper or newer")
 def test_barrier_live_range(device):
 
